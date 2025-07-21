@@ -8,14 +8,15 @@
 // 5. [NUEVO] Renderizado de Objeto 3D con OpenGL:
 //    - Se crea una ventana OpenGL usando GLFW.
 //    - El video de la cámara se dibuja como textura de fondo.
-//    - Un cubo 3D con iluminación Phong se renderiza sobre el marcador ArUco.
-//    - La pose (rvec, tvec) de OpenCV se usa para posicionar el cubo.
+//    - Un objeto .obj 3D con iluminación Phong se renderiza sobre el marcador ArUco.
+//    - La pose (rvec, tvec) de OpenCV se usa para posicionar el objeto.
 //
 // Versión de OpenCV: 4.9.0
-// Dependencias Adicionales: GLFW, GLAD, GLM
+// Dependencias Adicionales: GLFW, GLAD, GLM, TinyObjLoader
 // Compilación: g++ -o main main.cpp glad.c -lglfw -lGL `pkg-config --cflags --libs opencv4`
 // (Nota: Debes tener los archivos de cabecera de glad, glfw, glm y linkear las librerías)
 // (Nota 2: glad.c debe generarse desde el servicio web de GLAD y ponerse junto a main.cpp)
+// (Nota 3: tiny_obj_loader.h debe estar en la ruta de inclusión)
 
 #include <iostream>
 #include <opencv2/aruco.hpp>
@@ -24,7 +25,8 @@
 #include <vector>
 
 // --- INCLUIR EL RENDERIZADOR DE OPENGL ---
-#include "ARCubeRenderer.h"
+// *** CAMBIO: Asegúrate de que el nombre del archivo coincida con cómo lo guardaste ***
+#include <ARCubeRenderer.h>
 
 class AugmentedRealityApp {
 private:
@@ -34,7 +36,7 @@ private:
   cv::aruco::ArucoDetector detector;
   
   // --- INSTANCIA DEL RENDERIZADOR ---
-  ARCubeRenderer renderer;
+  ARObjectRenderer renderer;
 
   bool isCalibrated = false;
   std::string calibrationFilePath = "calibration_data.yml";
@@ -52,7 +54,6 @@ private:
   bool loadCalibration();
   void saveCalibration();
   void performCalibration();
-  // Modificado para pasar los vectores de pose al renderizador
   void detectAndRender(cv::Mat &frame); 
   bool detectHandGesture(const cv::Mat &inputFrame);
 };
@@ -71,7 +72,7 @@ AugmentedRealityApp::AugmentedRealityApp()
 AugmentedRealityApp::~AugmentedRealityApp() {
   if (cap.isOpened())
     cap.release();
-  // La limpieza de la ventana ahora la hace el destructor de ARCubeRenderer
+  // La limpieza de la ventana ahora la hace el destructor de ARObjectRenderer
   std::cout << "Aplicación finalizada." << std::endl;
 }
 
@@ -97,7 +98,6 @@ void AugmentedRealityApp::saveCalibration() {
   std::cout << "Calibración guardada." << std::endl;
 }
 
-// La calibración ahora muestra la ventana de OpenCV temporalmente
 void AugmentedRealityApp::performCalibration() {
     std::cout << "\n--- INICIANDO PROCESO DE CALIBRACION ---" << std::endl;
     std::cout << "Muestre un tablero de ajedrez de 9x6 a la cámara." << std::endl;
@@ -155,26 +155,22 @@ void AugmentedRealityApp::performCalibration() {
     saveCalibration();
 }
 
-// Procesa cada fotograma y lo pasa al renderizador.
 void AugmentedRealityApp::detectAndRender(cv::Mat &frame) {
   std::vector<int> markerIds;
   std::vector<std::vector<cv::Point2f>> markerCorners;
   detector.detectMarkers(frame, markerCorners, markerIds);
 
-  cv::Vec3d rvec, tvec; // Vectores para pasar al renderizador
+  cv::Vec3d rvec, tvec; 
 
   if (!markerIds.empty()) {
-    // Usamos solo el primer marcador detectado para simplificar
     std::vector<cv::Point3f> objPoints = {
         cv::Point3f(-markerLength_m / 2.f, markerLength_m / 2.f, 0),
         cv::Point3f(markerLength_m / 2.f, markerLength_m / 2.f, 0),
         cv::Point3f(markerLength_m / 2.f, -markerLength_m / 2.f, 0),
         cv::Point3f(-markerLength_m / 2.f, -markerLength_m / 2.f, 0)};
 
-    // Estimar la pose del primer marcador
     cv::solvePnP(objPoints, markerCorners[0], cameraMatrix, distCoeffs, rvec, tvec);
     
-    // Para depuración, podemos dibujar los ejes en el frame original
     cv::drawFrameAxes(frame, cameraMatrix, distCoeffs, rvec, tvec, markerLength_m * 0.7f, 3);
   }
 
@@ -182,18 +178,12 @@ void AugmentedRealityApp::detectAndRender(cv::Mat &frame) {
   if (gestureTrigger) {
     cv::putText(frame, "GESTO DETECTADO!", cv::Point(10, 30),
                 cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
-    // Aquí se podría cambiar el estado del objeto 3D, por ejemplo, su color o animación.
-    // Por ahora, solo imprimimos en consola.
     std::cout << "Disparador de Gesto: ON" << std::endl;
   }
 
-  // --- LLAMADA AL RENDERIZADOR DE OPENGL ---
-  // Pasamos el frame, los vectores de pose y la matriz de la cámara.
-  // El renderizador se encargará de dibujar el fondo y el cubo si hay pose.
   renderer.render(frame, rvec, tvec, cameraMatrix);
 }
 
-// Bucle principal de la aplicación.
 void AugmentedRealityApp::run() {
   if (!isCalibrated) {
     performCalibration();
@@ -203,11 +193,19 @@ void AugmentedRealityApp::run() {
     }
   }
 
-  // --- INICIALIZAR EL RENDERIZADOR DE OPENGL ---
   cv::Mat tempFrame;
   cap >> tempFrame;
   if(!renderer.init(tempFrame.cols, tempFrame.rows, "Proyecto Final AR - OpenGL")) {
       std::cerr << "Fallo al inicializar el renderizador de OpenGL." << std::endl;
+      return;
+  }
+
+  // --- *** NUEVO: Cargar el modelo 3D *** ---
+  // Reemplaza estas rutas con las rutas a tus propios archivos .obj y .mtl
+  std::string objPath = "../../rata-dance-test1.obj";
+  std::string mtlBasePath = "../../"; // La carpeta donde está el .mtl
+  if (!renderer.loadModel(objPath, mtlBasePath)) {
+      std::cerr << "Fallo al cargar el modelo 3D. Saliendo." << std::endl;
       return;
   }
 
@@ -216,7 +214,6 @@ void AugmentedRealityApp::run() {
   std::cout << "Cierre la ventana para salir." << std::endl;
 
   cv::Mat frame;
-  // El bucle ahora es controlado por la ventana de GLFW
   while (!renderer.windowShouldClose()) {
     cap >> frame;
     if (frame.empty()) break;
