@@ -1,32 +1,10 @@
-// main.cpp
-//
-// Título: Implementación de la Base para Realidad Aumentada con OpenCV y OpenGL
-// Cumple con los requisitos del Trabajo Final de Computación Gráfica.
-//
-// Funcionalidades Implementadas:
-// ... (mismos requisitos que antes, ahora con renderizado 3D)
-// 5. [NUEVO] Renderizado de Objeto 3D con OpenGL:
-//    - Se crea una ventana OpenGL usando GLFW.
-//    - El video de la cámara se dibuja como textura de fondo.
-//    - Un objeto .obj 3D con iluminación Phong se renderiza sobre el marcador ArUco.
-//    - La pose (rvec, tvec) de OpenCV se usa para posicionar el objeto.
-//
-// Versión de OpenCV: 4.9.0
-// Dependencias Adicionales: GLFW, GLAD, GLM, TinyObjLoader
-// Compilación: g++ -o main main.cpp glad.c -lglfw -lGL `pkg-config --cflags --libs opencv4`
-// (Nota: Debes tener los archivos de cabecera de glad, glfw, glm y linkear las librerías)
-// (Nota 2: glad.c debe generarse desde el servicio web de GLAD y ponerse junto a main.cpp)
-// (Nota 3: tiny_obj_loader.h debe estar en la ruta de inclusión)
-
 #include <iostream>
 #include <opencv2/aruco.hpp>
 #include <opencv2/opencv.hpp>
 #include <string>
 #include <vector>
 
-// --- INCLUIR EL RENDERIZADOR DE OPENGL ---
-// *** CAMBIO: Asegúrate de que el nombre del archivo coincida con cómo lo guardaste ***
-#include <ARCubeRenderer.h>
+#include <ARObjectRenderer.h>
 
 class AugmentedRealityApp {
 private:
@@ -72,7 +50,6 @@ AugmentedRealityApp::AugmentedRealityApp()
 AugmentedRealityApp::~AugmentedRealityApp() {
   if (cap.isOpened())
     cap.release();
-  // La limpieza de la ventana ahora la hace el destructor de ARObjectRenderer
   std::cout << "Aplicación finalizada." << std::endl;
 }
 
@@ -160,9 +137,13 @@ void AugmentedRealityApp::detectAndRender(cv::Mat &frame) {
   std::vector<std::vector<cv::Point2f>> markerCorners;
   detector.detectMarkers(frame, markerCorners, markerIds);
 
-  cv::Vec3d rvec, tvec; 
+  cv::Vec3d rvec, tvec;
+  rvec = cv::Vec3d(0,0,0);
+  tvec = cv::Vec3d(0,0,0);
+  bool markerFound = false;
 
   if (!markerIds.empty()) {
+    markerFound = true;
     std::vector<cv::Point3f> objPoints = {
         cv::Point3f(-markerLength_m / 2.f, markerLength_m / 2.f, 0),
         cv::Point3f(markerLength_m / 2.f, markerLength_m / 2.f, 0),
@@ -174,13 +155,11 @@ void AugmentedRealityApp::detectAndRender(cv::Mat &frame) {
     cv::drawFrameAxes(frame, cameraMatrix, distCoeffs, rvec, tvec, markerLength_m * 0.7f, 3);
   }
 
-  bool gestureTrigger = detectHandGesture(frame);
-  if (gestureTrigger) {
-    cv::putText(frame, "GESTO DETECTADO!", cv::Point(10, 30),
-                cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
-    std::cout << "Disparador de Gesto: ON" << std::endl;
+  if (markerFound && detectHandGesture(frame)) {
+    cv::putText(frame, "GESTO: PUNO CERRADO!", cv::Point(10, 30),
+                cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 0, 255), 2);
+    renderer.triggerAnimation();
   }
-
   renderer.render(frame, rvec, tvec, cameraMatrix);
 }
 
@@ -200,10 +179,8 @@ void AugmentedRealityApp::run() {
       return;
   }
 
-  // --- *** NUEVO: Cargar el modelo 3D *** ---
-  // Reemplaza estas rutas con las rutas a tus propios archivos .obj y .mtl
-  std::string objPath = "../../rata-dance-test1.obj";
-  std::string mtlBasePath = "../../"; // La carpeta donde está el .mtl
+  std::string objPath = "../../rata-centrada.obj";
+  std::string mtlBasePath = "../../";
   if (!renderer.loadModel(objPath, mtlBasePath)) {
       std::cerr << "Fallo al cargar el modelo 3D. Saliendo." << std::endl;
       return;
@@ -246,19 +223,23 @@ bool AugmentedRealityApp::detectHandGesture(const cv::Mat &inputFrame) {
         }
     }
 
-    if (maxAreaIdx != -1 && maxArea > 8000) {
+    if (maxAreaIdx != -1 && maxArea > 8000) { // Umbral de área para evitar ruido
         std::vector<int> hullIndices;
-        cv::convexHull(contours[maxAreaIdx], hullIndices);
+        cv::convexHull(contours[maxAreaIdx], hullIndices, false); // 'false' para obtener índices
+
         if (hullIndices.size() > 3) {
             std::vector<cv::Vec4i> defects;
             cv::convexityDefects(contours[maxAreaIdx], hullIndices, defects);
-            int fingerCount = 0;
+
+            int deepDefectCount = 0;
             for (const cv::Vec4i &v : defects) {
-                if (v[3] / 256.0 > 15) {
-                    fingerCount++;
+                float depth = v[3] / 256.0;
+                if (depth > 20) { 
+                    deepDefectCount++;
                 }
             }
-            if (fingerCount >= 3) {
+
+            if (deepDefectCount <= 1) {
                 return true;
             }
         }
